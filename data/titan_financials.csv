@@ -1,0 +1,37 @@
+key,label,statement,unit,FY20,FY21,FY22,FY23,FY24,FY25,FY26
+revenue,Revenue from operations,Profit & Loss,Rs crore,21052,21644,28799,40575,51084,60456,87584
+bullion_sales,of which: bullion (gold ingot) sales,Profit & Loss,Rs crore,0,1355,1045,2208,4116,3124,10568
+other_income,Other income,Profit & Loss,Rs crore,153,186,234,308,533,486,552
+cogs,Cost of goods sold (materials + purchases + inventory change),Profit & Loss,Rs crore,15155,16414,21641,30355,39432,47456,70307
+employee_cost,Employee benefits expense,Profit & Loss,Rs crore,1199,1065,1349,1647,1864,2156,2681
+other_expenses,Other expenses (incl. advertising),Profit & Loss,Rs crore,2231,2441,2468,3694,4496,5150,6241
+depreciation,Depreciation & amortisation,Profit & Loss,Rs crore,348,375,399,441,584,693,826
+finance_cost,Finance costs,Profit & Loss,Rs crore,166,203,218,300,619,953,1180
+share_of_jv,Share of profit/(loss) of associate & JV,Profit & Loss,Rs crore,-4,-5,0,1,1,1,1
+exceptional,Exceptional items (expense),Profit & Loss,Rs crore,0,0,54,0,0,0,101
+pbt,Profit before tax,Profit & Loss,Rs crore,2102,1327,2904,4447,4623,4535,6801
+tax,Total tax expense,Profit & Loss,Rs crore,609,353,706,1173,1127,1198,1728
+pat,Net profit (PAT),Profit & Loss,Rs crore,1493,974,2198,3274,3496,3337,5073
+eps,EPS - basic,Profit & Loss,Rs per share,16.91,10.96,24.48,36.61,39.40,37.62,57.19
+dps,Dividend per share (declared for the year),Profit & Loss,Rs per share,4,4,7.5,10,11,11,15
+equity_capital,Equity share capital,Balance Sheet,Rs crore,89,89,89,89,89,89,89
+other_equity,Other equity (reserves),Balance Sheet,Rs crore,6580,7408,9214,11762,9304,11535,15614
+total_equity,Total equity (incl. minority interest),Balance Sheet,Rs crore,6673,7502,9333,11904,9393,11624,15703
+borrowings,Borrowings (current + non-current),Balance Sheet,Rs crore,723,165,518,2195,7838,10286,11378
+gold_on_loan,Gold on loan,Balance Sheet,Rs crore,1585,4210,5398,5299,5341,7810,16070
+lease_liabilities,Lease liabilities,Balance Sheet,Rs crore,1243,1256,1359,1873,2349,2681,3173
+trade_payables,Trade payables,Balance Sheet,Rs crore,596,789,1294,1214,1410,1963,2864
+current_liabilities,Total current liabilities,Balance Sheet,Rs crore,5628,7714,10512,13264,16529,25793,39793
+ppe,"Property, plant & equipment",Balance Sheet,Rs crore,1285,1216,1218,1343,1737,1854,2684
+inventories,Inventories,Balance Sheet,Rs crore,8103,8408,13609,16584,19051,28184,42743
+trade_receivables,Trade receivables,Balance Sheet,Rs crore,312,366,565,674,1018,1068,916
+cash,Cash & cash equivalents,Balance Sheet,Rs crore,75,181,219,232,409,407,873
+bank_balances,Other bank balances,Balance Sheet,Rs crore,306,379,1354,1111,1117,1177,1044
+current_investments,Current investments (mostly mutual funds),Balance Sheet,Rs crore,114,2805,15,2164,1666,1337,2249
+current_assets,Total current assets,Balance Sheet,Rs crore,10121,13197,17454,22407,25608,34434,50781
+total_assets,Total assets,Balance Sheet,Rs crore,13550,16452,21194,27023,31550,40647,60561
+cfo,Cash from operating activities,Cash Flow,Rs crore,-348,4139,-724,1370,1695,-541,5590
+cfi,Cash from investing activities,Cash Flow,Rs crore,235,-2801,1164,-1811,-189,546,-2934
+cff,Cash from financing activities,Cash Flow,Rs crore,-242,-1234,-403,457,-1329,-7,-2159
+capex,Capex (purchase of PPE & intangibles),Cash Flow,Rs crore,355,146,224,432,691,494,902
+dividends_paid,Dividends paid (cash),Cash Flow,Rs crore,536,355,355,666,888,976,976
