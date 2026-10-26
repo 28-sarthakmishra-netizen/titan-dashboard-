@@ -9,5 +9,5 @@ echo  Checking / installing required libraries (first time takes 1-2 minutes)...
 echo.
 echo  Starting the Titan dashboard... it will open in your browser.
 echo  Keep this window open. Close it to stop the dashboard.
-%PY% -m streamlit run app.py
+%PY% -m streamlit run app.py --server.headless false
 pause

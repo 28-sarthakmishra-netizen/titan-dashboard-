@@ -25,6 +25,7 @@ Numbers: consolidated, Rs crore, taken from Titan's Annual Reports
 """
 
 import math
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,6 +34,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+
+import forecast as fc                   # 'Forecast' tab: scenario & trend forecasts
+import showcase                         # 'Why Titan' tab: drawings, cards, facts
+from chatbot import SUGGESTIONS, TitanBot  # 'Ask TitanBot' tab: the chatbot brain
+
+# Hide harmless "this will change in a future version" messages from pandas / yfinance
+warnings.simplefilter("ignore", FutureWarning)
+warnings.simplefilter("ignore", DeprecationWarning)
+try:
+    from pandas.errors import Pandas4Warning
+    warnings.simplefilter("ignore", Pandas4Warning)
+except ImportError:
+    pass
 
 # =====================================================================
 # SECTION 1: SETTINGS  (safe to edit)
@@ -110,7 +124,7 @@ h1, h2, h3, h4 { font-family: 'Cormorant Garamond', Georgia, serif !important; l
 
 /* ---------- tabs ---------- */
 .stTabs [data-baseweb="tab-list"] { gap: 2px; border-bottom: 1px solid rgba(212,175,55,0.18); flex-wrap: wrap; }
-.stTabs [data-baseweb="tab"] { height: 46px; padding: 0 16px; color: #B9B0A0; font-weight: 500; font-size: 0.95rem; }
+.stTabs [data-baseweb="tab"] { height: 44px; padding: 0 9px; color: #B9B0A0; font-weight: 500; font-size: 0.88rem; }
 .stTabs [aria-selected="true"] { color: #F3E3B0 !important; }
 .stTabs [data-baseweb="tab-highlight"] { background-color: #D4AF37; height: 2px; }
 .stTabs [data-baseweb="tab-border"] { display: none; }
@@ -202,6 +216,7 @@ footer { visibility: hidden; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
+st.markdown(showcase.CSS, unsafe_allow_html=True)
 
 
 # =====================================================================
@@ -468,6 +483,13 @@ def show_table(df, **kwargs):
         st.dataframe(df, use_container_width=True, **kwargs)
 
 
+def stretch_button(label, key=None):
+    try:
+        return st.button(label, key=key, width="stretch")
+    except TypeError:   # older Streamlit versions
+        return st.button(label, key=key, use_container_width=True)
+
+
 def kpi(label, value, delta=None, good_when_up=True, note=None) -> str:
     d = ""
     if delta is not None and not (isinstance(delta, float) and math.isnan(delta)):
@@ -657,9 +679,9 @@ with h2:
 
 st.write("")
 
-tab_over, tab_stock, tab_pl, tab_seg, tab_bs, tab_ratio, tab_data = st.tabs([
-    "🏛️ Overview", "📈 Share Price (Live)", "💰 Profit & Loss", "💎 Segments",
-    "🏦 Balance Sheet & Cash", "🩺 Ratios & Health Check", "📚 Data & Sources",
+tab_over, tab_bot, tab_why, tab_stock, tab_pl, tab_seg, tab_bs, tab_ratio, tab_fc, tab_data = st.tabs([
+    "🏛️ Overview", "💬 Ask TitanBot", "✨ Why Titan", "📈 Share Price", "💰 P&L", "💎 Segments",
+    "🏦 Balance Sheet", "🩺 Health Check", "🔮 Forecast", "📚 Data",
 ])
 
 # ---------- shared numbers for the selected range ----------
@@ -782,6 +804,190 @@ with tab_over:
 
 
 # =====================================================================
+# TAB: ASK TITANBOT (chatbot)
+#   The "brain" is in chatbot.py - it reads the same numbers as the charts.
+# =====================================================================
+def bot_price_info():
+    """Live price summary for TitanBot (None when offline)."""
+    df, status, _ = load_price_history(NSE_SYMBOL)
+    if df is None or len(df) < 2:
+        return None
+    close = df["Close"]
+    end = df.index.max()
+    q = get_quote(NSE_SYMBOL)
+    last = q["last"] if q else float(close.iloc[-1])
+    prev = q["prev"] if (q and q["prev"]) else float(close.iloc[-2])
+
+    def ret(years):
+        s = close[close.index >= end - pd.DateOffset(years=years)]
+        return (float(close.iloc[-1]) / float(s.iloc[0]) - 1) * 100 if len(s) > 1 else None
+
+    yr = df[df.index >= end - pd.Timedelta(days=365)]
+    when = (q["time"].strftime("live · %d %b %Y, %I:%M %p IST") if (q and q["live"])
+            else f"last close · {end:%d %b %Y}")
+    return {"last": last, "chg": (last / prev - 1) * 100 if prev else 0.0, "when": when,
+            "mcap": last * SHARES_OUTSTANDING_CR, "pe": last / FIN.loc[YEARS[-1], "eps"],
+            "low52": float(yr["Low"].min()), "high52": float(yr["High"].max()),
+            "ret1y": ret(1), "ret5y": ret(5)}
+
+
+CORE_REVENUE = FIN["revenue"] - FIN["bullion_sales"]      # revenue without bullion (gold-bar) sales
+FC_BASE = {"revenue": float(CORE_REVENUE.iloc[-1])}       # forecasts start from the latest actual year
+
+
+def preset_forecasts(n_years):
+    """Bear / Base / Bull forecasts (used by TitanBot and the Forecast tab)."""
+    return {name: fc.preset_forecast(name, FC_BASE, n_years, shares_cr=SHARES_OUTSTANDING_CR, last_fy=YEARS[-1])
+            for name in fc.SCENARIOS}
+
+
+BOT = TitanBot(
+    fin=FIN, metrics=compute_metrics(FIN, exclude_bullion=False),
+    seg_rev=seg_table("revenue", fold_corporate=False), seg_ebit=seg_table("ebit", fold_corporate=False),
+    shareholding=SHARE, years=YEARS, price_fn=bot_price_info, forecast_fn=preset_forecasts,
+)
+
+
+def bot_chart(spec):
+    """Turns the small chart description from TitanBot into a Plotly chart."""
+    if spec["kind"] == "compare":
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=spec["labels"], y=spec["va"], name=spec["a"], marker_color=BLUE,
+                             hovertemplate=f"{spec['a']}: ₹%{{y:,.0f}} cr<extra></extra>"))
+        fig.add_trace(go.Bar(x=spec["labels"], y=spec["vb"], name=spec["b"], marker_color=GOLD,
+                             hovertemplate=f"{spec['b']}: ₹%{{y:,.0f}} cr<extra></extra>"))
+        style_fig(fig, spec["title"], height=300)
+        fig.update_layout(barmode="group")
+        return fig
+    base = SEGMENT_COLORS.get(spec.get("segment"), GOLD)
+    hl = spec.get("highlight")
+    d, pre, suf = spec.get("decimals", 0), spec.get("prefix", ""), spec.get("suffix", "")
+    labels = [f"{pre}{v:,.{d}f}{suf}" for v in spec["y"]]
+    if spec["kind"] == "line":
+        sizes = [13 if (hl and x == hl) else 8 for x in spec["x"]]
+        fig = go.Figure(go.Scatter(
+            x=spec["x"], y=spec["y"], mode="lines+markers+text", text=labels, textposition="top center",
+            textfont=dict(color=INK2, size=11), line=dict(color=base, width=2.2),
+            marker=dict(size=sizes, color=base, line=dict(color=SURFACE, width=2)),
+            hovertemplate="%{x}: %{text}<extra></extra>"))
+        lo, hi = min(spec["y"]), max(spec["y"])
+        pad = (hi - lo) * 0.3 or abs(hi) * 0.2 or 1
+        fig.update_yaxes(range=[min(0, lo - pad), hi + pad])
+    else:
+        colors = [base if (hl is None or x == hl) else "rgba(237,230,216,0.16)" for x in spec["x"]]
+        fstart = spec.get("forecast_from")
+        is_fc = [bool(fstart) and spec["x"].index(x) >= spec["x"].index(fstart) for x in spec["x"]]
+        fig = go.Figure(go.Bar(x=spec["x"], y=spec["y"], marker_color=colors, text=labels, textposition="outside",
+                               marker_pattern=dict(shape=["/" if f else "" for f in is_fc], fgcolor=SURFACE,
+                                                   solidity=0.25),
+                               textfont=dict(color=INK2, size=11), cliponaxis=False,
+                               hovertemplate="%{x}: %{text}<extra></extra>"))
+        if fstart:
+            fig.add_vline(x=spec["x"].index(fstart) - 0.5, line=dict(color="rgba(212,175,55,0.5)", width=1, dash="dot"))
+            fig.add_annotation(x=spec["x"].index(fstart) - 0.5, y=1.02, yref="paper", text="forecast →",
+                               showarrow=False, xanchor="left", font=dict(color=MUTED, size=11))
+        fig.update_yaxes(range=[min(0, min(spec["y"]) * 1.2), max(spec["y"]) * 1.2])
+    style_fig(fig, spec["title"], height=290, legend=False, ysuffix=suf, yprefix=pre, hovermode="closest")
+    return fig
+
+
+with tab_bot:
+    st.markdown(
+        """<div class="sc-hero"><h2>💬 Ask TitanBot</h2>
+        <p>Type any question about Titan's finances in <b>English or Hinglish</b> — for example
+        <i>“How was FY24?”</i>, <i>“FY26 kaisa raha?”</i>, <i>“compare FY22 vs FY26”</i> or <i>“debt kitna hai?”</i>.
+        TitanBot answers instantly from the annual-report numbers (FY2019-20 to FY2025-26), with a chart.
+        It runs fully inside this Python app — no paid AI service needed.</p></div>""",
+        unsafe_allow_html=True)
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = [{"role": "assistant", **BOT.answer("hi")}]
+
+    st.markdown('<div class="note" style="margin-bottom:6px">Quick questions — click one:</div>', unsafe_allow_html=True)
+    clicked = None
+    sug_cols = st.columns(4)
+    for i, sug in enumerate(SUGGESTIONS):
+        with sug_cols[i % 4]:
+            if stretch_button(sug, key=f"sugg_{i}"):
+                clicked = sug
+
+    chat_box = st.container()
+    typed = st.chat_input("Ask TitanBot… e.g. “FY24 kaisa raha?” or “profit in 2023”", key="bot_input")
+    question = typed or clicked
+    if question:
+        st.session_state.chat.append({"role": "user", "text": question})
+        st.session_state.chat.append({"role": "assistant", **BOT.answer(question)})
+
+    with chat_box:
+        for i, msg in enumerate(st.session_state.chat):
+            with st.chat_message(msg["role"], avatar="⌚" if msg["role"] == "assistant" else "🧑‍💼"):
+                st.markdown(msg["text"])
+                if msg.get("table"):
+                    show_table(pd.DataFrame(msg["table"]), hide_index=True)
+                if msg.get("chart"):
+                    show_chart(bot_chart(msg["chart"]), key=f"botchart_{i}")
+
+    c1, c2 = st.columns([1, 5])
+    with c1:
+        if stretch_button("🧹 Clear chat", key="clear_chat"):
+            st.session_state.chat = [{"role": "assistant", **BOT.answer("hi")}]
+            st.rerun()
+    with c2:
+        st.markdown('<div class="note" style="padding-top:8px">TitanBot is rule-based: it understands questions about '
+                    'revenue, profit, margins, EPS, dividend, ROE/ROCE, debt, cash flow, inventory, segments, share price, '
+                    'shareholding, history and USPs. Years can be written as FY24, 2023-24 or 2024.</div>',
+                    unsafe_allow_html=True)
+
+
+# =====================================================================
+# TAB: WHY TITAN (USP showcase) - drawings & facts live in showcase.py
+# =====================================================================
+with tab_why:
+    st.markdown(
+        """<div class="sc-hero"><h2>✨ What makes Titan, Titan</h2>
+        <p>Titan's edge is <b>engineering + trust + reach</b>: watches thin enough to set world records, jewellery
+        customers can verify, and India's widest lifestyle retail network. Hover over (or tap) the cards to flip them.</p></div>""",
+        unsafe_allow_html=True)
+    st.markdown(showcase.stats_html(), unsafe_allow_html=True)
+
+    section("Signature products", "Original illustrations · hover or tap a card to see the facts behind it")
+    st.markdown(showcase.cards_html(), unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1.25, 1], gap="large")
+    with c1:
+        section("How slim is slim?", "Titan Edge next to everyday objects — drawn to scale")
+        st.markdown(showcase.slim_html(), unsafe_allow_html=True)
+    with c2:
+        section("Quick facts", "Changes every few seconds")
+        st.markdown(showcase.did_you_know_html(), unsafe_allow_html=True)
+
+    section("Innovation timeline", "Hover over a dot for the story")
+    tl = showcase.TIMELINE
+    xs = list(range(len(tl)))
+    levels = [1.0, -1.0, 1.7, -1.7]
+    ys = [levels[i % 4] for i in xs]
+    fig = go.Figure()
+    for x, y in zip(xs, ys):
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=y * 0.82, line=dict(color="rgba(212,175,55,0.35)", width=1))
+    fig.add_hline(y=0, line=dict(color="rgba(212,175,55,0.55)", width=2))
+    fig.add_trace(go.Scatter(
+        x=xs, y=[0] * len(xs), mode="markers", marker=dict(size=13, color=ACCENT, line=dict(color=SURFACE, width=3)),
+        customdata=[[e[0], e[1], e[2]] for e in tl],
+        hovertemplate="<b>%{customdata[0]} · %{customdata[1]}</b><br>%{customdata[2]}<extra></extra>", showlegend=False))
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="text", text=[f"<b>{e[0]}</b><br>{e[1]}" for e in tl],
+        textposition=["top center" if y > 0 else "bottom center" for y in ys],
+        textfont=dict(color=INK, size=12), customdata=[[e[0], e[1], e[2]] for e in tl],
+        hovertemplate="<b>%{customdata[0]} · %{customdata[1]}</b><br>%{customdata[2]}<extra></extra>", showlegend=False))
+    style_fig(fig, None, height=330, legend=False, hovermode="closest")
+    fig.update_xaxes(visible=False, range=[-0.6, len(xs) - 0.4])
+    fig.update_yaxes(visible=False, range=[-2.9, 2.9])
+    show_chart(fig, "why_timeline")
+    st.markdown('<div class="note">Facts come from Titan\'s annual reports and company releases; product drawings are '
+                'original illustrations, not photographs.</div>', unsafe_allow_html=True)
+
+
+# =====================================================================
 # TAB 2: SHARE PRICE (LIVE)
 # =====================================================================
 with tab_stock:
@@ -873,7 +1079,8 @@ with tab_stock:
         bench_df, bench_status, _ = load_price_history(BENCHMARK_SYMBOL)
         if bench_df is not None:
             section(f"Titan vs {BENCHMARK_NAME}", "Both start at 100 on the first day of the chosen period, so you can compare returns directly")
-            joined = pd.concat([vclose.rename("Titan"), bench_df["Close"].rename(BENCHMARK_NAME)], axis=1).dropna()
+            joined = pd.concat([vclose.rename("Titan"), bench_df["Close"].rename(BENCHMARK_NAME)],
+                               axis=1, sort=True).dropna()
             if len(joined) > 2:
                 idx = joined / joined.iloc[0] * 100
                 fig = go.Figure()
@@ -1404,6 +1611,257 @@ with tab_ratio:
     st.markdown('<div class="note">ROE and ROCE use the average of opening and closing balances '
                 f'(for {YEARS[0]} the closing balance is used). EBIT = profit before tax + interest + exceptional items.</div>',
                 unsafe_allow_html=True)
+
+
+# =====================================================================
+# TAB: FORECAST (scenario + statistical trend) - maths lives in forecast.py
+# =====================================================================
+FC_KEYS = {"growth": "fc_growth", "fade": "fc_fade", "ebitda": "fc_ebitda", "tax": "fc_tax", "payout": "fc_payout"}
+ADV_KEYS = {"dep": "fc_dep", "interest": "fc_interest", "other_income": "fc_oi"}
+
+
+def _apply_preset():
+    name = st.session_state.get("fc_preset", "Base")
+    if name in fc.SCENARIOS:
+        for k, key in FC_KEYS.items():
+            st.session_state[key] = float(fc.SCENARIOS[name][k])
+        for k, key in ADV_KEYS.items():
+            st.session_state[key] = float(fc.ADVANCED_DEFAULTS[k])
+
+
+def _mark_custom():
+    st.session_state["fc_preset"] = "Custom"
+
+
+if "fc_preset" not in st.session_state:
+    st.session_state["fc_preset"] = "Base"
+    _apply_preset()
+
+with tab_fc:
+    st.markdown(
+        """<div class="sc-hero"><h2>🔮 Forecast — Titan FY27 to FY31</h2>
+        <p>Pick a scenario or move the sliders: the projected revenue, profit, EPS and dividend update instantly.
+        Forecasts start from FY26 revenue <b>excluding bullion</b> (gold-bar) sales. These are model estimates for
+        learning — not predictions you should invest on.</p></div>""", unsafe_allow_html=True)
+
+    hist_core = CORE_REVENUE
+    n_hist = len(YEARS) - 1
+    ref_cagr = cagr(hist_core.iloc[0], hist_core.iloc[-1], n_hist)
+    ref_cagr3 = cagr(hist_core.iloc[-4], hist_core.iloc[-1], 3)
+    hist_margin = (M_ALL["ebitda"] / hist_core * 100)
+
+    # ---------- controls ----------
+    c1, c2 = st.columns([1.6, 1])
+    with c1:
+        st.radio("Scenario", ["Bear", "Base", "Bull", "Custom"], key="fc_preset", horizontal=True,
+                 on_change=_apply_preset,
+                 help="Bear / Base / Bull load ready-made assumptions. Moving any slider switches to Custom.")
+    with c2:
+        n_ahead = st.slider("Years to forecast", 1, 5, 5, key="fc_years")
+    if st.session_state["fc_preset"] in fc.SCENARIOS:
+        st.markdown(f'<div class="note">📌 {fc.SCENARIO_NOTES[st.session_state["fc_preset"]]}</div>',
+                    unsafe_allow_html=True)
+
+    s1, s2, s3, s4, s5 = st.columns(5)
+    with s1:
+        st.slider("Revenue growth, first year (%)", 0.0, 40.0, step=0.5, key="fc_growth", on_change=_mark_custom,
+                  help=f"History: {ref_cagr:.1f}% a year over FY20–FY26, {ref_cagr3:.1f}% over the last 3 years.")
+    with s2:
+        st.slider("Growth slows by (pts / year)", 0.0, 5.0, step=0.5, key="fc_fade", on_change=_mark_custom,
+                  help="Big companies usually grow a bit slower each year. 1 = 18%, 17%, 16% …")
+    with s3:
+        st.slider("EBITDA margin (%)", 6.0, 16.0, step=0.1, key="fc_ebitda", on_change=_mark_custom,
+                  help=f"FY26 actual: {hist_margin.iloc[-1]:.1f}% · 7-year average: {hist_margin.mean():.1f}% (on revenue excl. bullion).")
+    with s4:
+        st.slider("Tax rate (%)", 18.0, 32.0, step=0.5, key="fc_tax", on_change=_mark_custom,
+                  help=f"FY26 actual: {M_ALL.loc[YEARS[-1], 'tax_rate']:.1f}%")
+    with s5:
+        st.slider("Dividend payout (%)", 0.0, 60.0, step=1.0, key="fc_payout", on_change=_mark_custom,
+                  help=f"FY26 actual: {M_ALL.loc[YEARS[-1], 'payout_ratio']:.0f}% of EPS")
+    with st.expander("Advanced: smaller costs as % of revenue"):
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            st.slider("Depreciation (%)", 0.5, 2.0, step=0.05, key="fc_dep", on_change=_mark_custom)
+        with a2:
+            st.slider("Interest cost (%)", 0.5, 3.0, step=0.05, key="fc_interest", on_change=_mark_custom)
+        with a3:
+            st.slider("Other income (%)", 0.0, 1.5, step=0.05, key="fc_oi", on_change=_mark_custom)
+
+    ss = st.session_state
+    mine = fc.scenario_forecast(FC_BASE, n_ahead, ss.fc_growth, ss.fc_fade, ss.fc_ebitda, ss.fc_tax, ss.fc_payout,
+                                dep=ss.fc_dep, interest=ss.fc_interest, other_income=ss.fc_oi,
+                                shares_cr=SHARES_OUTSTANDING_CR, last_fy=YEARS[-1])
+    rng = preset_forecasts(n_ahead)
+    bear, bull = rng["Bear"], rng["Bull"]
+    fy_end = mine.index[-1]
+    last = YEARS[-1]
+
+    kpi_row([
+        kpi(f"Revenue excl. bullion · {fy_end}E", crore(mine.loc[fy_end, "revenue"]),
+            note=f"{pct(cagr(hist_core.iloc[-1], mine.loc[fy_end, 'revenue'], n_ahead))} a year from {last}"),
+        kpi(f"Net profit · {fy_end}E", crore(mine.loc[fy_end, "pat"]),
+            note=f"{pct(cagr(FIN.loc[last, 'pat'], mine.loc[fy_end, 'pat'], n_ahead))} a year from {last}"),
+        kpi(f"EPS · {fy_end}E", f"₹{mine.loc[fy_end, 'eps']:.1f}", note=f"{last} actual ₹{FIN.loc[last, 'eps']:.2f}"),
+        kpi(f"Dividend / share · {fy_end}E", f"₹{mine.loc[fy_end, 'dps']:.1f}", note=f"{last} actual ₹{FIN.loc[last, 'dps']:g}"),
+        kpi(f"Net margin · {fy_end}E", pct(mine.loc[fy_end, "pat_margin"]),
+            note=f"{last} actual {pct(FIN.loc[last, 'pat'] / hist_core.iloc[-1] * 100)}"),
+    ])
+
+    def fc_bar_chart(hist_vals, col, title, decimals=0):
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=YEARS, y=hist_vals, name="Actual", marker_color=GOLD,
+                             hovertemplate="%{x}: ₹%{y:,.0f} cr<extra>Actual</extra>"))
+        err_hi = np.clip(bull[col].values - mine[col].values, 0, None)
+        err_lo = np.clip(mine[col].values - bear[col].values, 0, None)
+        fig.add_trace(go.Bar(
+            x=list(mine.index), y=mine[col], name="Forecast (your scenario)", marker_color="rgba(212,175,55,0.55)",
+            marker_pattern=dict(shape="/", fgcolor=SURFACE, solidity=0.3),
+            error_y=dict(type="data", symmetric=False, array=err_hi, arrayminus=err_lo, color=INK2, thickness=1.2,
+                         width=6),
+            customdata=np.stack([bear[col].values, bull[col].values], axis=1),
+            hovertemplate="%{x}E: ₹%{y:,.0f} cr<br>Bear–Bull: ₹%{customdata[0]:,.0f} – ₹%{customdata[1]:,.0f} cr"
+                          "<extra>Forecast</extra>"))
+        fig.add_vline(x=len(YEARS) - 0.5, line=dict(color="rgba(212,175,55,0.5)", width=1, dash="dot"))
+        fig.add_annotation(x=len(YEARS) - 0.5, y=1.0, yref="paper", text="forecast →", showarrow=False,
+                           xanchor="left", font=dict(color=MUTED, size=11))
+        style_fig(fig, title, height=380, hovermode="closest")
+        fig.update_layout(barmode="overlay")
+        return fig
+
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        show_chart(fc_bar_chart(hist_core.values, "revenue", "Revenue excl. bullion (₹ crore)"), "fc_rev")
+    with c2:
+        show_chart(fc_bar_chart(FIN["pat"].values, "pat", "Net profit (₹ crore)"), "fc_pat")
+    st.markdown('<div class="note">Striped bars = your forecast. The thin whiskers show the range between the '
+                '<b>Bear</b> and <b>Bull</b> scenarios.</div>', unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1.2, 1], gap="large")
+    with c1:
+        fig = go.Figure()
+        fx = list(mine.index)
+        fig.add_trace(go.Scatter(x=fx + fx[::-1], y=list(bull["eps"]) + list(bear["eps"])[::-1], fill="toself",
+                                 mode="lines", fillcolor="rgba(212,175,55,0.12)", line=dict(width=0), hoverinfo="skip",
+                                 name="Bear–Bull range"))
+        fig.add_trace(go.Scatter(x=YEARS, y=FIN["eps"], name="Actual EPS", mode="lines+markers",
+                                 line=dict(color=GOLD, width=2.4), marker=dict(size=8, line=dict(color=SURFACE, width=2)),
+                                 hovertemplate="%{x}: ₹%{y:.2f}<extra>Actual</extra>"))
+        fig.add_trace(go.Scatter(x=[YEARS[-1]] + fx, y=[FIN.loc[last, "eps"]] + list(mine["eps"]),
+                                 name="Forecast EPS", mode="lines+markers", line=dict(color=ACCENT, width=2.4, dash="dash"),
+                                 marker=dict(size=8, line=dict(color=SURFACE, width=2)),
+                                 hovertemplate="%{x}: ₹%{y:.1f}<extra>Forecast</extra>"))
+        style_fig(fig, "Earnings per share (₹)", height=360, yprefix="₹")
+        fig.update_xaxes(categoryorder="array", categoryarray=YEARS + fx)
+        show_chart(fig, "fc_eps")
+    with c2:
+        tbl = pd.DataFrame({
+            "Revenue growth": [f"{v:.1f}%" for v in mine["growth"]],
+            "Revenue (₹ cr)": [inr(v) for v in mine["revenue"]],
+            "EBITDA (₹ cr)": [inr(v) for v in mine["ebitda"]],
+            "Net profit (₹ cr)": [inr(v) for v in mine["pat"]],
+            "Net margin": [f"{v:.1f}%" for v in mine["pat_margin"]],
+            "EPS (₹)": [f"{v:.1f}" for v in mine["eps"]],
+            "Dividend (₹)": [f"{v:.1f}" for v in mine["dps"]],
+        }, index=[f"{y}E" for y in mine.index]).T
+        section("Forecast table", "E = estimate")
+        show_table(tbl)
+
+    # ---------- what could the share be worth? ----------
+    section("What could the share be worth?", "Simple maths: forecast EPS × a P/E multiple you choose (illustrative only)")
+    live = bot_price_info()
+    cur_pe = live["pe"] if live else 60.0
+    c1, c2 = st.columns([1, 2.2], gap="large")
+    with c1:
+        pe_pick = st.slider("P/E multiple", 20, 100, int(min(max(round(cur_pe / 5) * 5, 20), 100)), step=5,
+                            key="fc_pe", help="How many times yearly earnings investors pay. Titan has usually "
+                                              "traded at a high P/E because of its steady growth.")
+        if live:
+            st.markdown(f'<div class="note">Today: ₹{inr(live["last"], 0)} per share, which is '
+                        f'{live["pe"]:.0f}× {last} EPS.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="note">This is a classroom illustration, not a price target or investment advice.</div>',
+                    unsafe_allow_html=True)
+    with c2:
+        implied = mine["eps"] * pe_pick
+        fig = go.Figure(go.Bar(x=[f"{y}E" for y in mine.index], y=implied, marker_color=GOLD,
+                               text=[f"₹{inr(v)}" for v in implied], textposition="outside", cliponaxis=False,
+                               textfont=dict(color=INK2, size=11),
+                               hovertemplate="%{x}: ₹%{y:,.0f} per share<extra></extra>"))
+        if live:
+            fig.add_hline(y=live["last"], line=dict(color=BLUE, width=1.5, dash="dot"),
+                          annotation_text=f"today ₹{inr(live['last'], 0)}", annotation_position="top left",
+                          annotation_font=dict(color=BLUE, size=11))
+        style_fig(fig, f"Implied value per share at {pe_pick}× earnings", height=320, legend=False, yprefix="₹",
+                  hovermode="closest")
+        fig.update_yaxes(range=[0, max(implied.max(), live["last"] if live else 0) * 1.2])
+        show_chart(fig, "fc_value")
+
+    # ---------- sensitivity ----------
+    section("Sensitivity: what matters most?",
+            f"Net profit in {fy_end}E (₹ crore) if growth or margin turn out different — your other settings stay the same")
+    g0, m0 = ss.fc_growth, ss.fc_ebitda
+    g_list = [g0 + d for d in (-8, -4, 0, 4, 8)]
+    m_list = [round(m0 + d, 1) for d in (-1.2, -0.6, 0, 0.6, 1.2)]
+    grid = np.array([[fc.scenario_forecast(FC_BASE, n_ahead, g, ss.fc_fade, m, ss.fc_tax, ss.fc_payout,
+                                           dep=ss.fc_dep, interest=ss.fc_interest, other_income=ss.fc_oi,
+                                           shares_cr=SHARES_OUTSTANDING_CR, last_fy=last)["pat"].iloc[-1]
+                      for m in m_list] for g in g_list])
+    text = [[("★ " if (i == 2 and j == 2) else "") + inr(v) for j, v in enumerate(row)] for i, row in enumerate(grid)]
+    fig = go.Figure(go.Heatmap(
+        z=grid, x=[f"{m:.1f}%" for m in m_list], y=[f"{g:.1f}%" for g in g_list], text=text, texttemplate="%{text}",
+        textfont=dict(size=12, color="#FFFFFF"), xgap=3, ygap=3,
+        colorscale=[[0, "#2A2216"], [0.5, "#7A5A1C"], [1, "#D4AF37"]], showscale=False,
+        hovertemplate="Growth %{y}, EBITDA margin %{x}<br>Net profit ₹%{z:,.0f} cr<extra></extra>"))
+    style_fig(fig, None, height=330, legend=False, hovermode="closest")
+    fig.update_xaxes(title=dict(text="EBITDA margin →", font=dict(color=MUTED, size=12)), side="bottom")
+    fig.update_yaxes(title=dict(text="First-year revenue growth →", font=dict(color=MUTED, size=12)),
+                     gridcolor="rgba(0,0,0,0)", zeroline=False, autorange="reversed")
+    show_chart(fig, "fc_sens")
+    st.markdown('<div class="note">★ = your current scenario. Brighter = more profit.</div>', unsafe_allow_html=True)
+
+    # ---------- statistical trend ----------
+    section("Statistical trend forecast", "No assumptions — just extends the past growth trend (log-linear regression) with an 80% range")
+    c1, c2, c3 = st.columns([1.3, 1.2, 1.5])
+    with c1:
+        t_metric = st.selectbox("Metric", ["Revenue excl. bullion", "Net profit", "EPS"], key="fc_tmetric")
+    with c2:
+        drop_covid = st.toggle("Leave out FY21 (COVID year)", value=True, key="fc_dropcovid",
+                               help="FY21 was distorted by lockdowns, so it can bend the trend.")
+    series = {"Revenue excl. bullion": hist_core, "Net profit": FIN["pat"], "EPS": FIN["eps"]}[t_metric]
+    hist_fit, tfc, info = fc.trend_forecast(series, n_ahead, exclude=("FY21",) if drop_covid else ())
+    with c3:
+        st.markdown(f'<div class="note" style="padding-top:6px">Trend growth: <b style="color:#F1DFA6">'
+                    f'{info["growth"]:.1f}% a year</b> · fit quality R² = {info["r2"]:.2f} '
+                    f'(1.0 = perfect) · based on {info["n"]} years.</div>', unsafe_allow_html=True)
+    is_money = t_metric != "EPS"
+    unit = "₹%{y:,.0f} cr" if is_money else "₹%{y:,.2f}"
+    rfmt = ",.0f" if is_money else ",.1f"
+    fig = go.Figure()
+    fx = list(tfc.index)
+    fig.add_trace(go.Scatter(x=fx + fx[::-1], y=list(tfc["high"]) + list(tfc["low"])[::-1], fill="toself",
+                             mode="lines", fillcolor="rgba(57,135,229,0.14)", line=dict(width=0), hoverinfo="skip",
+                             name="80% range"))
+    fig.add_trace(go.Scatter(x=YEARS, y=hist_fit["trend"], name="Trend line", mode="lines",
+                             line=dict(color="rgba(237,230,216,0.35)", width=1.5, dash="dot"), hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=YEARS, y=hist_fit["actual"], name="Actual", mode="lines+markers",
+                             line=dict(color=GOLD, width=2.4), marker=dict(size=8, line=dict(color=SURFACE, width=2)),
+                             hovertemplate=f"%{{x}}: {unit}<extra>Actual</extra>"))
+    fig.add_trace(go.Scatter(x=[YEARS[-1]] + fx, y=[hist_fit["trend"].iloc[-1]] + list(tfc["forecast"]),
+                             name="Trend forecast", mode="lines+markers", line=dict(color=BLUE, width=2.4, dash="dash"),
+                             marker=dict(size=8, line=dict(color=SURFACE, width=2)),
+                             customdata=np.stack([[np.nan] + list(tfc["low"]), [np.nan] + list(tfc["high"])], axis=1),
+                             hovertemplate=f"%{{x}}: {unit}<br>80% range: %{{customdata[0]:{rfmt}}} – %{{customdata[1]:{rfmt}}}"
+                                           f"<extra>Trend</extra>"))
+    if drop_covid:
+        fig.add_annotation(x="FY21", y=float(series["FY21"]), text="left out", showarrow=True, arrowhead=0, ay=-30,
+                           font=dict(color=MUTED, size=11), arrowcolor=MUTED)
+    style_fig(fig, f"{t_metric}: actual and trend forecast", height=400, yprefix="₹")
+    fig.update_xaxes(categoryorder="array", categoryarray=YEARS + fx)
+    show_chart(fig, "fc_trend")
+    st.markdown(f'<div class="note">How to read it: if Titan keeps growing the way it did in the past, {t_metric.lower()} '
+                f'in {fy_end} would land around <b>{"₹" + inr(tfc["forecast"].iloc[-1]) + (" cr" if is_money else "")}</b>, '
+                f'most likely between {"₹" + inr(tfc["low"].iloc[-1])} and {"₹" + inr(tfc["high"].iloc[-1])}'
+                f'{" cr" if is_money else ""}. Compare this with your scenario above — if your numbers are far above '
+                f'the trend, you are assuming Titan does better than its own history.</div>', unsafe_allow_html=True)
 
 
 # =====================================================================
